@@ -516,11 +516,14 @@ private extension UDS.GenericSerialAdapter {
             case .auto:
                 fallthrough
             case .j1850_PWM:
-                fallthrough
+                self.busProtocolEncoder = NullProtocolEncoder(maximumFrameLength: 10)
+                self.busProtocolDecoder = UDS.J1850.Decoder()
             case .j1850_VPWM:
-                fallthrough
+                self.busProtocolEncoder = NullProtocolEncoder(maximumFrameLength: 11)
+                self.busProtocolDecoder = UDS.J1850.Decoder()
             case .iso9141_2:
-                fatalError("Unsupported bus protocol \(proto)")
+                self.busProtocolEncoder = NullProtocolEncoder(maximumFrameLength: 7)
+                self.busProtocolDecoder = UDS.KWP.Decoder()
 
             case .kwp2000_5KBPS:
                 fallthrough
