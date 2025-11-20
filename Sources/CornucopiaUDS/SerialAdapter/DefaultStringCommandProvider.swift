@@ -38,7 +38,9 @@ public extension UDS.GenericSerialAdapter {
         static let responseConverterBusProtocol: ResponseConverter = { stringResponse, _ in
             guard !stringResponse.isEmpty else { return .failure(.noResponse) }
             guard !stringResponse.contains("?") else { return .failure(.unrecognizedCommand) }
-            let last = String(stringResponse.CC_trimmed().last!)
+            let trimmed = stringResponse.CC_trimmed()
+            guard !trimmed.isEmpty, let lastCharacter = trimmed.last else { return .failure(.noResponse) }
+            let last = String(lastCharacter)
             let proto = UDS.BusProtocol(rawValue: last) ?? .unknown
             return Result.success(proto)
         }

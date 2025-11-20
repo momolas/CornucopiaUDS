@@ -88,11 +88,11 @@ public extension UDS {
 
                     case .uint8:
                         guard let unit = self.unit else { return nil }
-                        let uint8 = message.bytes.last!
+                        guard let uint8 = message.bytes.last else { return nil }
                         return Measurement(value: Double(uint8), unit: unit)
 
                     case .localized:
-                        let uint8 = message.bytes.last!
+                        guard let uint8 = message.bytes.last else { return nil }
                         return "OBD2_\(self.mnemonic)_\(uint8, radix: .hex, toWidth: 2)".uds_localized
                 }
             }

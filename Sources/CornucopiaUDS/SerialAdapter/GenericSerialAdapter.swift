@@ -148,8 +148,12 @@ public extension UDS {
         public override func send(message: UDS.Message, expectedResponses: Int? = nil) async throws -> UDS.Message {
              var message = message
 
+            guard let encoder = self.busProtocolEncoder else {
+                throw UDS.Error.encoderError(string: "No protocol encoder available")
+            }
+
             do {
-                message.bytes = try self.busProtocolEncoder!.encode(message.bytes)
+                message.bytes = try encoder.encode(message.bytes)
             } catch let error as UDS.Error {
                 throw error
             } catch {
@@ -185,9 +189,17 @@ public extension UDS {
             validResponses.forEach { response in
                 bytes += response.bytes
             }
+            guard let decoder = self.busProtocolDecoder else {
+                throw UDS.Error.decoderError(string: "No protocol decoder available")
+            }
+
+            guard let firstResponse = validResponses.first else {
+                throw UDS.Error.noResponse
+            }
+
             do {
-                bytes = try self.busProtocolDecoder!.decode(bytes)
-                let assembled: UDS.Message = .init(id: validResponses.first!.id, bytes: bytes)
+                bytes = try decoder.decode(bytes)
+                let assembled: UDS.Message = .init(id: firstResponse.id, bytes: bytes)
                 return assembled
             } catch let error as UDS.Error {
                  throw error

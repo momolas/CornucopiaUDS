@@ -152,10 +152,22 @@ public extension UDS {
                         responses.forEach { response in
                             bytes += response.bytes
                         }
-                        let assembled = (header: responses.first!.header, bytes: bytes)
-                        let decoded = self.decode(message: assembled)
-                        let success = UDS.MessageResult.success(decoded)
-                        then(success)
+
+                        guard let firstResponse = responses.first else {
+                            then(.failure(.noResponse))
+                            return
+                        }
+
+                        let assembled = (header: firstResponse.header, bytes: bytes)
+                        do {
+                             let decoded = try self.decode(message: assembled)
+                             let success = UDS.MessageResult.success(decoded)
+                             then(success)
+                        } catch let error as UDS.Error {
+                             then(.failure(error))
+                        } catch {
+                             then(.failure(.decodingError))
+                        }
                 }
             }
         }
