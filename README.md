@@ -51,9 +51,9 @@ UDS is about 50% done – I have started with the necessary calls to upload (TE
 
 Although I plan to implement the full set of OBD2 calls, the primary focus has been on UDS. I have started to implement a bunch of OBD2 calls to lay out the path for contributors, but did not have time yet to do more.
 
-## Caution! Rocky Road Ahead!
+## Modern Swift
 
-Unfortunately, this library has been written **before** some exciting changes in Swift have been finished and deployed. Car communication is like network communication, hence of _asynchronous nature_. I would have loved to use the forthcoming Swift _concurrency_ support (`async`, `await`, `actor`, …), but it's not complete yet. This means that as soon as Swift 5.5 is available, I'm going to do some fundamental changes to this library.
+This library takes full advantage of the **Swift 5.5** _concurrency_ features (`async`, `await`, `actor`, …). Car communication is of asynchronous nature, hence it is a perfect fit for the new concurrency model.
 
 ## Contributions
 
