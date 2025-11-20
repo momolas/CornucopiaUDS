@@ -122,8 +122,7 @@ public extension UDS {
             self.desiredBusProtocol = busProtocol
             self.updateState(.searching)
 
-            // Trigger init sequence
-            await self.didUpdateState()
+            // Trigger init sequence handled by state change notification/observer in BaseAdapter
         }
 
         // Deprecated synchronous connect
