@@ -302,9 +302,16 @@ private extension StreamCommandQueue {
         guard terminationRange.endIndex == active.response.count else { return }
 
         active.response.removeSubrange(terminationRange)
-        guard let response = String(data: active.response, encoding: .utf8) else { fatalError("Data Encoding Error") }
+        guard let response = String(data: active.response, encoding: .utf8) else {
+            logger.error("Data Encoding Error - Could not convert response to UTF8")
+            active.handler("") // Fail gracefully with empty response
+            self.active = nil
+            self.handleNextCommand()
+            return
+        }
 
-        let duration = String(format: "%04.0f ms", 1000 * (CFAbsoluteTimeGetCurrent() - active.timestamp!))
+        let startTime = active.timestamp ?? CFAbsoluteTimeGetCurrent()
+        let duration = String(format: "%04.0f ms", 1000 * (CFAbsoluteTimeGetCurrent() - startTime))
         logger.debug("Command processed [\(duration)]: '\(active.request.CC_debugString)' => '\(active.response.CC_debugString)'")
         active.handler(response)
 
@@ -313,7 +320,10 @@ private extension StreamCommandQueue {
     }
 
     func handleCommandTimeout() {
-        guard let active = self.active else { fatalError("Command timeout without active command!?") }
+        guard let active = self.active else {
+            logger.error("Command timeout called without active command!?")
+            return
+        }
         logger.notice("Timeout while waiting for a response to \(active.request.CC_debugString)")
 
         active.handler("")
