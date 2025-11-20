@@ -61,6 +61,7 @@ public extension UDS {
         case busError(string: String)
         case encoderError(string: String)
         case decoderError(string: String)
+        case decodingError // generic decoding error
         case disconnected
         case invalidCharacters
         case malformedService // local error

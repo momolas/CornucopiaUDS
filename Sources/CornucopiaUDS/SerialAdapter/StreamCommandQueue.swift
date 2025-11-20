@@ -7,40 +7,53 @@ import Foundation
 
 private var logger = Cornucopia.Core.Logger(category: "StreamCommandQueue")
 
-public protocol _StreamCommandQueueDelegate {
+public protocol _StreamCommandQueueDelegate: AnyObject {
     func streamCommandQueueDetectedEOF(_ streamCommandQueue: StreamCommandQueue)
     func streamCommandQueueDetectedError(_ streamCommandQueue: StreamCommandQueue)
 }
 
-public class StreamCommandQueue: NSObject, StreamDelegate {
+// Internal delegate to bridge Stream (NSObject) to Actor
+class StreamMonitor: NSObject, StreamDelegate {
+    weak var actor: StreamCommandQueue?
+
+    init(actor: StreamCommandQueue) {
+        self.actor = actor
+    }
+
+    func stream(_ stream: Stream, handle eventCode: Stream.Event) {
+        guard let actor = self.actor else { return }
+        Task {
+            await actor.handleStreamEvent(stream, eventCode: eventCode)
+        }
+    }
+}
+
+@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
+public actor StreamCommandQueue {
 
     public typealias CompletionHandler = (String) -> ()
     public typealias InputStreamConfigurationHandler = (InputStream) -> ()
     public typealias Delegate = _StreamCommandQueueDelegate
 
     class Command {
-
         let request: Data
         let termination: Data
         let timeout: TimeInterval
         let dummy: Bool
 
-        var handler: CompletionHandler
+        var continuation: CheckedContinuation<String, Never>?
         var pendingBytesToSend: Data
         var response = Data()
         var timestamp: CFTimeInterval?
-        var timer: DispatchSourceTimer?
+        var timeoutTask: Task<Void, Never>?
 
-        init(request: String, termination: String, timeout: TimeInterval = 0, handler: @escaping(CompletionHandler)) {
-            guard let request = request.data(using: String.Encoding.utf8) else { fatalError("Request needs to be representable as UTF8") }
-            guard let termination = termination.data(using: String.Encoding.utf8) else { fatalError("Termination needs to be representable as UTF8") }
-
+        init(request: Data, termination: Data, timeout: TimeInterval, dummy: Bool, continuation: CheckedContinuation<String, Never>, pendingBytesToSend: Data) {
             self.request = request
-            self.pendingBytesToSend = request
             self.termination = termination
             self.timeout = timeout
-            self.dummy = request.isEmpty
-            self.handler = handler
+            self.dummy = dummy
+            self.continuation = continuation
+            self.pendingBytesToSend = pendingBytesToSend
         }
     }
 
@@ -51,85 +64,111 @@ public class StreamCommandQueue: NSObject, StreamDelegate {
     private var active: Command?
     private var mocks: [String: String] = [:]
 
-    public var inputConfigurationHandler: InputStreamConfigurationHandler?
-    public var delegate: Delegate?
+    private var monitor: StreamMonitor!
+
+    public private(set) var inputConfigurationHandler: InputStreamConfigurationHandler?
+    public weak var delegate: Delegate?
 
     public init(input: InputStream, output: OutputStream, termination: String? = nil) {
-
         self.input = input
         self.output = output
         self.termination = termination
+    }
 
-        super.init()
+    public func setDelegate(_ delegate: Delegate) {
+        self.delegate = delegate
+    }
 
-        self.input.delegate = self
-        self.output.delegate = self
-        self.input.schedule(in: RunLoop.current, forMode: .default)
-        self.output.schedule(in: RunLoop.current, forMode: .default)
-        //FIXME: Consider only opening the input stream on-demand, i.e. when the first command is being sent?
-        self.input.open()
+    public func configure(handler: InputStreamConfigurationHandler? = nil) {
+        self.inputConfigurationHandler = handler
+        self.monitor = StreamMonitor(actor: self)
+        self.input.delegate = self.monitor
+        self.output.delegate = self.monitor
 
-        //FIXME: Debugging
-        //self.installMock(request: "101F360100010203\r", response: "7ED3020005555555555\r")
-        //self.installMock(request: "210405060708090A220B0C0D0E0F1011231213141516171824191A1B1C\r", response: "7ED7F367F\r")
-        //self.installMock(request: "021002\r", response: "CAN ERROR\r\r")
+        // Schedule on main run loop as streams require a run loop
+        DispatchQueue.main.async {
+            self.input.schedule(in: RunLoop.current, forMode: .default)
+            self.output.schedule(in: RunLoop.current, forMode: .default)
+            self.input.open()
+            // Output opened on demand
+        }
     }
 
     deinit {
-        self.cleanup()
+        let input = self.input
+        let output = self.output
+        DispatchQueue.main.async {
+            input.close()
+            output.close()
+        }
     }
 
-    public func send(command: String, termination: String? = nil, timeout: TimeInterval = 0, then: @escaping(CompletionHandler)) {
+    public func send(command: String, termination: String? = nil, timeout: TimeInterval = 0) async -> String {
         guard let term = termination ?? self.termination else {
-            fatalError("Need either a command termination or the global termination")
+            logger.error("Need either a command termination or the global termination")
+            return ""
         }
 
-        let command = Command(request: command, termination: term, timeout: timeout, handler: then)
-        self.pending.append(command)
-        if active == nil {
-            self.handleNextCommand()
+        return await withCheckedContinuation { continuation in
+            guard let requestData = command.data(using: .utf8),
+                  let termData = term.data(using: .utf8) else {
+                logger.error("Command/Termination not UTF8")
+                continuation.resume(returning: "")
+                return
+            }
+
+            let cmd = Command(request: requestData, termination: termData, timeout: timeout, dummy: command.isEmpty, continuation: continuation, pendingBytesToSend: requestData)
+            self.pending.append(cmd)
+            if self.active == nil {
+                self.handleNextCommand()
+            }
         }
     }
 
     public func flush() {
-        //FIXME: Don't remove remaining commands on `flush()`
         logger.debug("Flushing…")
-        self.active = nil
-        self.pending = []
+        for cmd in pending {
+            cmd.timeoutTask?.cancel()
+            cmd.continuation?.resume(returning: "")
+            cmd.continuation = nil
+        }
+        self.pending.removeAll()
+
+        if let active = self.active {
+             active.timeoutTask?.cancel()
+             active.continuation?.resume(returning: "")
+             active.continuation = nil
+             self.active = nil
+        }
         logger.debug("Flushing complete!")
     }
 
     public func cleanup() {
-        //FIXME: If there is an active command, cancel it?
         logger.debug("Cleaning up…")
-        if self.input.streamStatus != .closed {
-            self.input.remove(from: RunLoop.current, forMode: .default)
-            self.input.close()
-        }
-        if self.output.streamStatus != .closed {
-            self.output.remove(from: RunLoop.current, forMode: .default)
-            self.output.close()
+        // Clean up streams on Main Thread
+        DispatchQueue.main.async {
+            if self.input.streamStatus != .closed {
+                self.input.remove(from: RunLoop.current, forMode: .default)
+                self.input.close()
+            }
+            if self.output.streamStatus != .closed {
+                self.output.remove(from: RunLoop.current, forMode: .default)
+                self.output.close()
+            }
         }
         logger.debug("Cleaned up!")
     }
 
-    //MARK: - <StreamDelegate>
-
-    public func stream(_ stream: Stream, handle eventCode: Stream.Event) {
-
-        precondition(Thread.isMainThread)
-
+    func handleStreamEvent(_ stream: Stream, eventCode: Stream.Event) {
         logger.trace("Handling stream \(stream) event \(eventCode)")
 
         if stream == self.input {
-
             switch eventCode {
-
                 case .openCompleted:
-                    guard let configurationHandler = self.inputConfigurationHandler else { return }
-                    configurationHandler(input)
-                    guard self.active != nil else { return }
-                    self.handleActiveCommand()
+                    if let configurationHandler = self.inputConfigurationHandler {
+                        configurationHandler(input)
+                    }
+                    if self.active != nil { self.handleActiveCommand() }
 
                 case .hasBytesAvailable:
                     self.handleBytesAvailable()
@@ -140,17 +179,10 @@ public class StreamCommandQueue: NSObject, StreamDelegate {
                 default:
                     break
             }
-
         } else if stream == self.output {
-
             switch eventCode {
-                case .openCompleted:
-                    guard self.active != nil else { return }
-                    self.handleActiveCommand()
-
-                case .hasSpaceAvailable:
-                    guard self.active != nil else { return }
-                    self.handleActiveCommand()
+                case .openCompleted, .hasSpaceAvailable:
+                    if self.active != nil { self.handleActiveCommand() }
 
                 case .errorOccurred:
                     self.handleError(on: stream)
@@ -158,23 +190,22 @@ public class StreamCommandQueue: NSObject, StreamDelegate {
                 default:
                     break
             }
-
         }
     }
 }
 
 //MARK: - Helpers
+@available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
 private extension StreamCommandQueue {
 
     static var BufferSize = 1024
 
-    func installMock(request: String, response: String) {
-        self.mocks[request] = response
+    // Helper to get string from data for logging/mocking
+    func string(from data: Data) -> String {
+        return String(data: data, encoding: .utf8) ?? ""
     }
 
     func handleNextCommand() {
-        precondition(self.active == nil, "called while another command has not been completed yet")
-
         guard !self.pending.isEmpty else {
             logger.trace("No more commands pending")
             return
@@ -185,7 +216,7 @@ private extension StreamCommandQueue {
     }
 
     func handleActiveCommand() {
-        precondition(self.active != nil, "called while there was no active command")
+        guard let active = self.active else { return }
 
         guard self.input.streamStatus == .open else {
             logger.trace("Input stream not open yet… waiting")
@@ -203,30 +234,16 @@ private extension StreamCommandQueue {
             return
         }
 
-        guard let active = self.active else { fatalError() }
-
-        let mockResponse = self.mocks[active.request.CC_string]
-        guard mockResponse == nil else {
-            logger.debug("Encountered mock request \(active.request.CC_debugString), synthesizing mocked response \(mockResponse!)")
-            active.handler(mockResponse!)
-            self.active = nil
-            if !self.pending.isEmpty {
-                DispatchQueue.main.async {
-                    self.handleNextCommand()
-                }
-            }
+        let requestString = string(from: active.request)
+        if let mockResponse = self.mocks[requestString] {
+            logger.debug("Encountered mock request \(requestString), synthesizing mocked response \(mockResponse)")
+            self.complete(active, with: mockResponse)
             return
         }
 
-        guard !active.dummy else {
+        if active.dummy {
             logger.trace("Encountered dummy command, synthesizing an empty response")
-            active.handler("")
-            self.active = nil
-            if !self.pending.isEmpty {
-                DispatchQueue.main.async {
-                    self.handleNextCommand()
-                }
-            }
+            self.complete(active, with: "")
             return
         }
 
@@ -235,27 +252,26 @@ private extension StreamCommandQueue {
             return
         }
 
-        //FIXME: withUnsafeBytes is deprecated – should rewrite this using the throwing API instead
-        //FIXME: Also – while we're on that subject – might check whether all this data and byte handling can be improved by using
-        //FIXME: [UInt8], ByteBuffer (from SwiftNIO), or pure unsafe memory instead
         let bytesWritten = active.pendingBytesToSend.withUnsafeBytes {
-            self.output.write($0, maxLength: active.pendingBytesToSend.count)
+            self.output.write($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: active.pendingBytesToSend.count)
         }
-        let writtenBytes = active.pendingBytesToSend.prefix(bytesWritten)
-        logger.trace("Wrote \(bytesWritten): '\(writtenBytes.CC_debugString)'")
+
+        // let writtenBytes = active.pendingBytesToSend.prefix(bytesWritten)
+        // logger.trace("Wrote \(bytesWritten)")
+
         active.pendingBytesToSend.removeFirst(bytesWritten)
 
         guard active.pendingBytesToSend.count > 0 else {
             logger.trace("No more bytes to send, waiting for the response…")
             active.timestamp = CFAbsoluteTimeGetCurrent()
+
             if active.timeout > 0 {
-                active.timer = {
-                    let t = DispatchSource.makeTimerSource(flags: DispatchSource.TimerFlags(), queue: DispatchQueue.main)
-                    t.schedule(deadline: .now() + active.timeout)
-                    t.setEventHandler { self.handleCommandTimeout() }
-                    t.resume()
-                    return t
-                }()
+                active.timeoutTask = Task {
+                    try? await Task.sleep(nanoseconds: UInt64(active.timeout * 1_000_000_000))
+                    if !Task.isCancelled {
+                        await self.handleCommandTimeout()
+                    }
+                }
             }
             return
         }
@@ -265,7 +281,8 @@ private extension StreamCommandQueue {
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: Self.BufferSize)
         defer { buffer.deallocate() }
         let bytesRead = self.input.read(buffer, maxLength: Self.BufferSize)
-        logger.trace("Read \(bytesRead): '\(buffer.CC_debugString(withLength: bytesRead))'")
+        logger.trace("Read \(bytesRead)")
+
         guard bytesRead >= 0 else {
             logger.notice("Error during reading")
             return
@@ -280,45 +297,44 @@ private extension StreamCommandQueue {
             logger.info("Ignoring unsolicited bytes")
             return
         }
-        active.timer?.cancel()
+        active.timeoutTask?.cancel()
 
-        //NOTE: Some adapters insert invalid (non-printable) data into the byte stream, so we need an additional sanitizing pass here
+        // Sanitizing pass
         var sanitized = Data()
-        var foundInvalidCharacters = false
         for i in 0..<bytesRead {
-            if buffer[i].CC_isASCII {
+            if buffer[i] >= 32 || buffer[i] == 13 || buffer[i] == 10 { // Basic ASCII printable + CR/LF check
                 sanitized.append(buffer[i])
             } else {
-                foundInvalidCharacters = true
-                logger.trace("Stripping byte value \(buffer[i])")
+                 logger.trace("Stripping byte value \(buffer[i])")
             }
-        }
-        if foundInvalidCharacters {
-            logger.debug("Input contains invalid characters (sanitized).")
         }
         active.response.append(sanitized)
 
-        guard let terminationRange = active.response.lastRange(of: active.termination) else { return }
-        guard terminationRange.endIndex == active.response.count else { return }
+        if let terminationRange = active.response.range(of: active.termination, options: .backwards),
+           terminationRange.upperBound == active.response.endIndex {
 
-        active.response.removeSubrange(terminationRange)
-        guard let response = String(data: active.response, encoding: .utf8) else { fatalError("Data Encoding Error") }
+            active.response.removeSubrange(terminationRange)
+            let response = String(data: active.response, encoding: .utf8) ?? ""
 
-        let duration = String(format: "%04.0f ms", 1000 * (CFAbsoluteTimeGetCurrent() - active.timestamp!))
-        logger.debug("Command processed [\(duration)]: '\(active.request.CC_debugString)' => '\(active.response.CC_debugString)'")
-        active.handler(response)
+            let startTime = active.timestamp ?? CFAbsoluteTimeGetCurrent()
+            let duration = String(format: "%04.0f ms", 1000 * (CFAbsoluteTimeGetCurrent() - startTime))
+            logger.debug("Command processed [\(duration)]: '\(self.string(from: active.request))' => '\(self.string(from: active.response))'")
 
-        self.active = nil
-        self.handleNextCommand()
+            self.complete(active, with: response)
+        }
     }
 
     func handleCommandTimeout() {
-        guard let active = self.active else { fatalError("Command timeout without active command!?") }
-        logger.notice("Timeout while waiting for a response to \(active.request.CC_debugString)")
+        guard let active = self.active else { return }
+        logger.notice("Timeout while waiting for a response to \(self.string(from: active.request))")
+        self.complete(active, with: "")
+    }
 
-        active.handler("")
+    func complete(_ command: Command, with response: String) {
+        command.timeoutTask?.cancel()
+        command.continuation?.resume(returning: response)
+        command.continuation = nil
         self.active = nil
-
         self.handleNextCommand()
     }
 

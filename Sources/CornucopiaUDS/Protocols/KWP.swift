@@ -30,7 +30,12 @@ public extension UDS.KWP {
 
         /// Decode a byte stream consisting on multiple individual concatenated frames by removing the protocol framing bytes as per KWP
         public func decode(_ bytes: [UInt8]) throws -> [UInt8] {
-            throw UDS.Error.decoderError(string: "KWP decoding not yet implemented")
+            // Assumes headers (3 bytes) and checksum (1 byte) are present
+            guard bytes.count >= 4 else {
+                throw UDS.Error.decoderError(string: "KWP frame too short: \(bytes.count)")
+            }
+            // Strip 3 bytes header and 1 byte checksum
+            return Array(bytes[3..<bytes.count-1])
         }
     }
 }
