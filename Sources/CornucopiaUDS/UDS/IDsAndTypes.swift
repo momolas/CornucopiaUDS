@@ -405,6 +405,26 @@ extension UDS {
         public static let eraseMemory           : UInt16 = 0xFF00
     }
 
+    // Service 0x28 - Communication Control
+    public enum CommunicationControlType: UInt8 {
+        case enableRxAndTx                              = 0x00
+        case enableRxAndDisableTx                       = 0x01
+        case disableRxAndEnableTx                       = 0x02
+        case disableRxAndTx                             = 0x03
+    }
+
+    public enum CommunicationType: UInt8 {
+        case normalCommunicationMessages                = 0x01
+        case networkManagementCommunicationMessages     = 0x02
+        case networkManagementCommunicationMessagesAndNormalCommunicationMessages = 0x03
+    }
+
+    // Service 0x85 - Control DTC Setting
+    public enum ControlDTCSettingType: UInt8 {
+        case on                                         = 0x01
+        case off                                        = 0x02
+    }
+
     // Service 0x34 – Request Download
     public struct RequestDownloadResponse: ConstructableViaMessage {
 
