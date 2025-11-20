@@ -1,7 +1,6 @@
 //
 //  Cornucopia – (C) Dr. Lauer Information Technology
 //
-/*
 import CornucopiaCore
 
 private var logger = Cornucopia.Core.Logger(category: "ISOTP")
@@ -203,14 +202,14 @@ private extension UDS.ISOTP {
 //MARK: - ISOTP Decoding
 private extension UDS.ISOTP {
 
-    func decode(message: UDS.Message) -> UDS.Message {
+    func decode(message: UDS.Message) throws -> UDS.Message {
 
-        let unframedPayload = message.bytes.count < 9 ? self.decodeSingleFrame(payload: message.bytes) : self.decodeMultiFrame(payload: message.bytes)
+        let unframedPayload = try message.bytes.count < 9 ? self.decodeSingleFrame(payload: message.bytes) : self.decodeMultiFrame(payload: message.bytes)
         return (header: message.header, bytes: unframedPayload)
     }
 
     // decodes a single frame to bytes
-    func decodeSingleFrame(payload: [UInt8]) -> [UInt8] {
+    func decodeSingleFrame(payload: [UInt8]) throws -> [UInt8] {
         let pci = payload[0]
         guard pci != 0x30 else {
             // Looks like an FC ACK frame, just pass this through
@@ -218,18 +217,24 @@ private extension UDS.ISOTP {
         }
         guard pci < 0x08 else {
             logger.error("Corrupt single frame with PCI \(pci, radix: .hex, prefix: true) detected")
-            //FIXME: Handle gracefully by throwing an exception
-            fatalError()
+            throw UDS.Error.decodingError
         }
         let border = Int(pci)
+        guard border < payload.count else {
+             logger.error("Invalid single frame length: \(border) >= \(payload.count)")
+             throw UDS.Error.decodingError
+        }
         return Array(payload[1...border])
     }
 
     // decodes multiple frames to bytes
-    func decodeMultiFrame(payload: [UInt8]) -> [UInt8] {
+    func decodeMultiFrame(payload: [UInt8]) throws -> [UInt8] {
         var payload = payload
         let pciHi = payload[0]
-        assert(pciHi & 0xF0 == 0x10, "Corrupt FF detected")
+        guard pciHi & 0xF0 == 0x10 else {
+            logger.error("Corrupt FF detected")
+            throw UDS.Error.decodingError
+        }
         let pciLo = payload[1]
         let pci = UInt16(pciHi) << 8 | UInt16(pciLo)
         var length = Int(pci & 0xFFF)
@@ -238,7 +243,10 @@ private extension UDS.ISOTP {
         var expectedCfPci: UInt8 = 0x21
         while payload.count > 0 {
             let cfPci = payload.removeFirst()
-            assert(cfPci == expectedCfPci, "Corrupt CF detected")
+            guard cfPci == expectedCfPci else {
+                logger.error("Corrupt CF detected")
+                throw UDS.Error.decodingError
+            }
             let expectedPayload = length - bytes.count
             let cfPayloadCount = min(8, payload.count, expectedPayload)
             bytes += payload[1..<cfPayloadCount]
@@ -251,4 +259,3 @@ private extension UDS.ISOTP {
         return Array(bytes)
     }
 }
-*/
