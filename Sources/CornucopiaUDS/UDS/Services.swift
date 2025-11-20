@@ -139,11 +139,11 @@ public extension UDS {
                     return [UDS.ServiceId.readDTCInformation, UDS.ReadDTCReportType.reportDTCByStatusMask.rawValue, mask.rawValue]
 
                 case .requestDownload(compression: let compression, encryption: let encryption, address: let address, length: let length):
-                    guard compression < 0x10 else { return [] }
-                    guard encryption < 0x10 else { return [] }
+                    guard compression < 0x10 else { preconditionFailure("Compression must be < 0x10") }
+                    guard encryption < 0x10 else { preconditionFailure("Encryption must be < 0x10") }
                     let dfi: UDS.DataFormatIdentifier = ((compression & 0x0F) << 4) | (encryption & 0x0F)
-                    guard address.count < 0x10 else { return [] }
-                    guard length.count < 0x10 else { return [] }
+                    guard address.count < 0x10 else { preconditionFailure("Address length must be < 0x10") }
+                    guard length.count < 0x10 else { preconditionFailure("Length length must be < 0x10") }
                     let alfid: UDS.AddressAndLengthFormatIdentifier = ((UInt8(address.count) & 0x0F) << 4) | (UInt8(length.count) & 0x0F)
                     return [UDS.ServiceId.requestDownload, dfi, alfid] + address + length
 
@@ -156,11 +156,11 @@ public extension UDS {
                     return [UDS.ServiceId.routineControl, type.rawValue, idhi, idlo] + rcor
 
                 case .securityAccessRequestSeed(level: let level):
-                    guard level < 0x7F && level % 2 == 1 else { return [] }
+                    guard level < 0x7F && level % 2 == 1 else { preconditionFailure("Level must be < 0x7F and odd") }
                     return [UDS.ServiceId.securityAccess, level]
 
                 case .securityAccessSendKey(level: let level, key: let key):
-                    guard level < 0x7F && level % 2 == 0 else { return [] }
+                    guard level < 0x7F && level % 2 == 0 else { preconditionFailure("Level must be < 0x7F and even") }
                     return [UDS.ServiceId.securityAccess, level] + key
 
                 case .testerPresent(type: let type):
@@ -169,7 +169,7 @@ public extension UDS {
                 case .transferData(bsc: let bsc, trpr: let trpr):
                     //FIXME: On ISOTP, the maximum record size for transferData is 4093.
                     //       I need to check whether this also applies to the other UDS transport protocols.
-                    guard trpr.count <= 4095 - 2 else { return [] }
+                    guard trpr.count <= 4095 - 2 else { preconditionFailure("TransferData record too large") }
                     return [UDS.ServiceId.transferData, bsc] + trpr
 
                 case .writeDataByIdentifier(id: let id, drec: let drec):
