@@ -77,6 +77,22 @@ public extension UDS {
         public func shutdown() {
             fatalError("pure virtual")
         }
+
+        // Async/Await API
+        @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
+        open func connect(via protocol: BusProtocol = .auto) async {
+            fatalError("pure virtual")
+        }
+
+        @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
+        open func sendRaw(message: UDS.Message, expectedResponses: Int? = nil) async throws -> UDS.Messages {
+            fatalError("pure virtual")
+        }
+
+        @available(iOS 13.0, macOS 10.15, tvOS 13.0, watchOS 6.0, *)
+        open func send(message: UDS.Message, expectedResponses: Int? = nil) async throws -> UDS.Message {
+             fatalError("pure virtual")
+        }
     }
 }
 
