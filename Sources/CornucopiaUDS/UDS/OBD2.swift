@@ -87,12 +87,12 @@ public extension UDS {
                         return Measurement(value: double, unit: unit)
 
                     case .uint8:
-                        guard let unit = self.unit else { fatalError(".uint8 conversion needs a unit set")}
-                        let uint8 = message.bytes.last!
+                        guard let unit = self.unit else { return nil }
+                        guard let uint8 = message.bytes.last else { return nil }
                         return Measurement(value: Double(uint8), unit: unit)
 
                     case .localized:
-                        let uint8 = message.bytes.last!
+                        guard let uint8 = message.bytes.last else { return nil }
                         return "OBD2_\(self.mnemonic)_\(uint8, radix: .hex, toWidth: 2)".uds_localized
                 }
             }

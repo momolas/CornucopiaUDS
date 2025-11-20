@@ -66,6 +66,7 @@ public extension UDS {
         case invalidCharacters
         case malformedService // local error
         case noResponse
+        case unexpectedResponse
         case timeout
         case unrecognizedCommand
         case udsNegativeResponse(code: UDS.NegativeResponseCode)

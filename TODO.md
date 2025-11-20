@@ -2,13 +2,13 @@
 
 ## Very Short Term
 
-- [ ] Guard protocol decoder against invalid inputs
+- [x] Guard protocol decoder against invalid inputs
 
 ## Short Term
 
-- [ ] Implement the missing UDS commands
-  - [ ] Control DTC Setting
-  - [ ] Communication Control
+- [x] Implement the missing UDS commands
+  - [x] Control DTC Setting
+  - [x] Communication Control
 - [ ] Implement the complete OBD2 command set
 - [ ] Implement the missing OBD2 bus protocols
 
