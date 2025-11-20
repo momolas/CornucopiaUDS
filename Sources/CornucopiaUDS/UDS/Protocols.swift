@@ -77,7 +77,10 @@ public extension UDS {
                     return
                 }
 
-                guard let ack = ACK(bytes: answer.bytes) else { fatalError("Not an FC ACK") }
+                guard let ack = ACK(bytes: answer.bytes) else {
+                    then(.failure(.unexpectedResponse))
+                    return
+                }
                 var nextMessage = message
                 nextMessage.bytes.removeFirst(8)
                 let partialMessage = (header: message.header, bytes: nextMessage.bytes)
@@ -107,7 +110,10 @@ public extension UDS {
 
                 guard message.bytes.isEmpty else {
                     // there are still pending frames…
-                    guard let ack = ACK(bytes: answer.bytes) else { fatalError("Not an FC ACK") }
+                    guard let ack = ACK(bytes: answer.bytes) else {
+                        then(.failure(.unexpectedResponse))
+                        return
+                    }
                     self.sendConsecutive(message: nextFrame, allowUnacknowledged: allowUnacknowledged - 1, then: then)
                     return
                 }

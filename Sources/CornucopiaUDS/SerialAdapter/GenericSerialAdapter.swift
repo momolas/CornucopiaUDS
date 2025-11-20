@@ -239,7 +239,8 @@ public extension UDS {
                 case .success(let messages as UDS.Messages):
                     return messages
                 case .success(_):
-                    fatalError() // Should match Messages for .data command
+                    // Should match Messages for .data command. But instead of crashing, we throw.
+                    throw UDS.Error.unexpectedResponse
             }
         }
 
@@ -325,7 +326,7 @@ private extension UDS.GenericSerialAdapter {
                     case .success(let messages as UDS.Messages):
                         return messages
                     case .success(_):
-                        fatalError()
+                        throw UDS.Error.unexpectedResponse
                 }
         }
     }

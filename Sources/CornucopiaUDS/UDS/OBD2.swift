@@ -87,7 +87,7 @@ public extension UDS {
                         return Measurement(value: double, unit: unit)
 
                     case .uint8:
-                        guard let unit = self.unit else { fatalError(".uint8 conversion needs a unit set")}
+                        guard let unit = self.unit else { return nil }
                         let uint8 = message.bytes.last!
                         return Measurement(value: Double(uint8), unit: unit)
 
