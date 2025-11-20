@@ -77,6 +77,7 @@ public extension UDS.ISOTP {
         
         // decodes a single frame to bytes
         private func decodeSingleFrame(payload: [UInt8]) throws -> [UInt8] {
+            guard !payload.isEmpty else { throw UDS.Error.decoderError(string: "Payload empty") }
             let pci = payload[0]
             guard pci != 0x30 else {
                 // Looks like an FC ACK frame, just pass this through
@@ -86,12 +87,14 @@ public extension UDS.ISOTP {
                 throw UDS.Error.decoderError(string: "Corrupt single frame with PCI \(pci, radix: .hex, prefix: true) detected")
             }
             let border = Int(pci)
+            guard payload.count > border else { throw UDS.Error.decoderError(string: "Payload too short for indicated length \(border)") }
             return Array(payload[1...border])
         }
         
         // decodes multiple frames to bytes
         private func decodeMultiFrame(payload: [UInt8]) throws -> [UInt8] {
             var payload = payload
+            guard payload.count >= 8 else { throw UDS.Error.decoderError(string: "Payload too short for MultiFrame") }
             let pciHi = payload[0]
             guard pciHi & 0xF0 == 0x10 else {
                 throw UDS.Error.decoderError(string: "Corrupt FF w/ PCI \(pciHi, radix: .hex, prefix: true) detected")

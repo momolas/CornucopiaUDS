@@ -87,7 +87,10 @@ extension UDS {
         public let dtc: [UDS.OBD2.DTC]
 
         public init(message: UDS.Message) {
-            guard message.bytes.count > 1 else { fatalError() }
+            guard message.bytes.count > 1 else {
+                self.dtc = []
+                return
+            }
             /*
              CAN-protocols deliver the actual number of DTC in the first byte of the payload (after 0x43 for the positive indication of service 0x03).
              From here, we have no idea about the bus protocol that transported this message, hence we need some heuristics:
@@ -95,7 +98,7 @@ extension UDS {
              we just check whether the length of the result is odd (non-CAN) or even (CAN).
              */
             let dtcStartOffset = message.bytes.count.CC_parity == .odd ? 1 : 2
-            self.dtc = message.bytes[dtcStartOffset...].CC_chunked(size: 2).map { UDS.OBD2.DTC(from: $0) }
+            self.dtc = message.bytes[dtcStartOffset...].CC_chunked(size: 2).compactMap { UDS.OBD2.DTC(from: $0) }
         }
 
         public var description: String { "DTCResponse: \(dtc)" }
@@ -390,7 +393,11 @@ extension UDS {
         public let dtc: [UDS.DTC]
 
         public init(message: UDS.Message) {
-            guard message.bytes.count > 2 else { fatalError() }
+            guard message.bytes.count > 2 else {
+                self.statusAvailabilityMask = UDS.DTC.StatusMask(rawValue: 0)
+                self.dtc = []
+                return
+            }
 
             self.statusAvailabilityMask = UDS.DTC.StatusMask(rawValue: message.bytes[2])
             let dtcStartOffset = 3
