@@ -95,8 +95,12 @@ public extension UDS {
 
             do {
                 message.bytes = try self.busProtocolEncoder!.encode(message.bytes)
+            } catch let error as UDS.Error {
+                let failure: UDS.MessageResult = .failure(error)
+                then(failure)
+                return
             } catch {
-                let failure: UDS.MessageResult = .failure(error as! UDS.Error)
+                let failure: UDS.MessageResult = .failure(UDS.Error.encoderError(string: error.localizedDescription))
                 then(failure)
                 return
             }
@@ -135,8 +139,11 @@ public extension UDS {
                             let assembled: UDS.Message = .init(id: responses.first!.id, bytes: bytes)
                             let success: UDS.MessageResult = .success(assembled)
                             then(success)
+                        } catch let error as UDS.Error {
+                             let failure: UDS.MessageResult = .failure(error)
+                             then(failure)
                         } catch {
-                            let failure: UDS.MessageResult = .failure(error as! UDS.Error)
+                            let failure: UDS.MessageResult = .failure(UDS.Error.decoderError(string: error.localizedDescription))
                             then(failure)
                         }
                 }
@@ -509,11 +516,14 @@ private extension UDS.GenericSerialAdapter {
             case .auto:
                 fallthrough
             case .j1850_PWM:
-                fallthrough
+                self.busProtocolEncoder = NullProtocolEncoder(maximumFrameLength: 10)
+                self.busProtocolDecoder = UDS.J1850.Decoder()
             case .j1850_VPWM:
-                fallthrough
+                self.busProtocolEncoder = NullProtocolEncoder(maximumFrameLength: 11)
+                self.busProtocolDecoder = UDS.J1850.Decoder()
             case .iso9141_2:
-                fatalError("Unsupported bus protocol \(proto)")
+                self.busProtocolEncoder = NullProtocolEncoder(maximumFrameLength: 7)
+                self.busProtocolDecoder = UDS.KWP.Decoder()
 
             case .kwp2000_5KBPS:
                 fallthrough

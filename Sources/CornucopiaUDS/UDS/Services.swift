@@ -47,6 +47,8 @@ public extension UDS {
         case clearDiagnosticInformation(groupOfDTC: GroupOfDTC)
         case clearAllDynamicallyDefinedDataIdentifiers
         case clearDynamicallyDefinedDataIdentifier(id: DataIdentifier)
+        case communicationControl(controlType: CommunicationControlType, communicationType: CommunicationType)
+        case controlDTCSetting(type: ControlDTCSettingType, groupOfDTC: GroupOfDTC = 0xFFFFFF)
         case dynamicallyDefineDataIdentifier(id: DataIdentifier, byIdentifier: DataIdentifier, position: PositionInRecord, length: MemorySize)
         case diagnosticSessionControl(session: DiagnosticSessionType)
         case ecuReset(type: EcuResetType)
@@ -107,6 +109,13 @@ public extension UDS {
 
                 case .clearAllDynamicallyDefinedDataIdentifiers:
                     return [UDS.ServiceId.dynamicallyDefineDataIdentifier, UDS.DynamicallyDefineDataIdentifierDefinitionType.clear.rawValue]
+
+                case .communicationControl(controlType: let controlType, communicationType: let communicationType):
+                    return [UDS.ServiceId.communicationControl, controlType.rawValue, communicationType.rawValue]
+
+                case .controlDTCSetting(type: let type, groupOfDTC: let group):
+                    let (_, msblo, lsbhi, lsblo) = group.CC_UInt8tuple
+                    return [UDS.ServiceId.controlDTCSetting, type.rawValue, msblo, lsbhi, lsblo]
 
                 case .dynamicallyDefineDataIdentifier(let id, let sourceId, let position, let length):
                     let idhi = UInt8(id >> 8 & 0xff)
