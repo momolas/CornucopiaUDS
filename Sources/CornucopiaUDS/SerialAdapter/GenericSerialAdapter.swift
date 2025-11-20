@@ -131,6 +131,13 @@ public extension UDS {
                 throw error
             } catch {
                 throw UDS.Error.encoderError(string: error.localizedDescription)
+                let failure: UDS.MessageResult = .failure(error)
+                then(failure)
+                return
+            } catch {
+                let failure: UDS.MessageResult = .failure(UDS.Error.encoderError(string: error.localizedDescription))
+                then(failure)
+                return
             }
 
             let responses: UDS.Messages
@@ -170,6 +177,44 @@ public extension UDS {
                  throw error
             } catch {
                 throw UDS.Error.decoderError(string: error.localizedDescription)
+                switch result {
+                    case .failure(let error):
+                        let failure = UDS.MessageResult.failure(error)
+                        then(failure)
+
+                    case .success(let responses):
+                        //TODO: Change the UDS.MessageHandler into a Result<Error, UDS.Message>, else we can't convey low level errors over to the next logical layer
+                        precondition(responses.count > 0, "Did not receive at least a single CAN frame")
+
+                        let sid = self.canAutoFormat ? message.bytes[0] : message.bytes[1]
+
+                        let responses = responses.filter { response in
+                            guard response.bytes[0] == UInt8(0x03) else { return true }
+                            guard response.bytes[1] == UDS.NegativeResponse else { return true }
+                            guard response.bytes[2] == sid else { return true }
+                            guard response.bytes[3] == UDS.NegativeResponseCode.requestCorrectlyReceivedResponsePending.rawValue else { return true }
+                            let transient = responses[0].bytes[1..<4].map { String(format: "0x%02X ", $0) }.joined()
+                            logger.trace("Ignoring transient UDS response \(transient)")
+                            return false
+                        }
+                        //FIXME: Ensure all headers are the same
+                        var bytes = [UInt8]()
+                        responses.forEach { response in
+                            bytes += response.bytes
+                        }
+                        do {
+                            bytes = try self.busProtocolDecoder!.decode(bytes)
+                            let assembled: UDS.Message = .init(id: responses.first!.id, bytes: bytes)
+                            let success: UDS.MessageResult = .success(assembled)
+                            then(success)
+                        } catch let error as UDS.Error {
+                             let failure: UDS.MessageResult = .failure(error)
+                             then(failure)
+                        } catch {
+                            let failure: UDS.MessageResult = .failure(UDS.Error.decoderError(string: error.localizedDescription))
+                            then(failure)
+                        }
+                }
             }
         }
 
