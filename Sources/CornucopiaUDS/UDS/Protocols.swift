@@ -161,14 +161,31 @@ private extension UDS.ISOTP {
 
     func encode(message: UDS.Message) -> UDS.Message {
         precondition(1...4095 ~= message.bytes.count, "Total payload size needs to be 0 < n < 4096")
-        let framedPayload = message.bytes.count < 7 ? self.encodeSingleFrame(payload: message.bytes) : self.encodeMultiFrame(payload: message.bytes)
+
+        // Check if we can use Single Frame for larger payloads (CAN FD)
+        // Assuming adapter.mtu reflects the transport capability.
+        // If mtu > 8, we assume CAN FD is possible.
+        if self.adapter.mtu > 8 && message.bytes.count <= self.adapter.mtu - 1 {
+            // Fits in SF
+             return (header: message.header, bytes: self.encodeSingleFrame(payload: message.bytes))
+        }
+
+        let framedPayload = message.bytes.count <= 7 ? self.encodeSingleFrame(payload: message.bytes) : self.encodeMultiFrame(payload: message.bytes)
         return (header: message.header, bytes: framedPayload)
     }
 
     // encodes bytes to a single frame
     func encodeSingleFrame(payload: [UInt8]) -> [UInt8] {
-        let pci = UInt8(payload.count)
-        return [pci] + payload
+        if payload.count <= 7 {
+            let pci = UInt8(payload.count)
+            return [pci] + payload
+        } else {
+            // CAN FD Single Frame with Data Length > 7
+            // PCI is 0x00, followed by DL
+            let pci: UInt8 = 0x00
+            let dl = UInt8(payload.count)
+            return [pci, dl] + payload
+        }
     }
 
     // encodes bytes to multiple frames
@@ -181,8 +198,15 @@ private extension UDS.ISOTP {
         payload.removeFirst(6)
         var bytes = ff
         var cfPci = UInt8(0x21)
+
+        // Calculate max payload per CF based on MTU
+        // For standard CAN, MTU=8 -> payload 7.
+        // For CAN FD, MTU=64 -> payload 63.
+        let mtu = self.adapter.mtu > 0 ? self.adapter.mtu : 8
+        let maxCfPayload = mtu - 1
+
         while payload.count > 0 {
-            let cfPayloadCount = min(7, payload.count)
+            let cfPayloadCount = min(maxCfPayload, payload.count)
             let cf = [cfPci] + payload[0..<cfPayloadCount]
             payload.removeFirst(cfPayloadCount)
             bytes += cf
@@ -204,27 +228,64 @@ private extension UDS.ISOTP {
 
     func decode(message: UDS.Message) throws -> UDS.Message {
 
-        let unframedPayload = try message.bytes.count < 9 ? self.decodeSingleFrame(payload: message.bytes) : self.decodeMultiFrame(payload: message.bytes)
+        let unframedPayload = try self.isSingleFrame(message.bytes) ? self.decodeSingleFrame(payload: message.bytes) : self.decodeMultiFrame(payload: message.bytes)
         return (header: message.header, bytes: unframedPayload)
+    }
+
+    func isSingleFrame(_ bytes: [UInt8]) -> Bool {
+        guard !bytes.isEmpty else { return false }
+        let pci = bytes[0]
+        // Standard SF: 0x00-0x07 (High nibble 0)
+        // CAN FD SF: 0x00 (Byte 0 is 0, Byte 1 is DL)
+        // FF: 0x10-0x1F (High nibble 1)
+        return (pci & 0xF0) == 0x00
     }
 
     // decodes a single frame to bytes
     func decodeSingleFrame(payload: [UInt8]) throws -> [UInt8] {
         let pci = payload[0]
-        guard pci != 0x30 else {
-            // Looks like an FC ACK frame, just pass this through
-            return payload
+
+        // Handle Flow Control ACK in single frame context if passed through
+        if pci == 0x30 {
+             return payload
         }
-        guard pci < 0x08 else {
-            logger.error("Corrupt single frame with PCI \(pci, radix: .hex, prefix: true) detected")
-            throw UDS.Error.decodingError
+
+        var length = 0
+        var offset = 1
+
+        if pci == 0x00 && payload.count > 1 {
+            // CAN FD SF with DL > 7
+            length = Int(payload[1])
+            offset = 2
+            if length == 0 {
+                 // Invalid
+                 logger.error("CAN FD SF with length 0")
+                 throw UDS.Error.decodingError
+            }
+        } else {
+            // Standard SF or CAN FD small SF
+            length = Int(pci)
         }
-        let border = Int(pci)
+
+        guard length > 0 else {
+             // Could be FC or empty? Standard says SF DL > 0.
+             // If PCI is 0 and no second byte (caught above), or pci 0 (valid for length 0? No).
+             // If pci > 0, length is pci.
+             // If pci == 0 and payload.count == 1, invalid.
+             if pci == 0 {
+                  // Re-check if it's valid 0 length? No.
+                  logger.error("Invalid single frame PCI 0")
+                  throw UDS.Error.decodingError
+             }
+             return []
+        }
+
+        let border = offset + length - 1 // Index of last byte
         guard border < payload.count else {
-             logger.error("Invalid single frame length: \(border) >= \(payload.count)")
+             logger.error("Invalid single frame length: \(length) (avail: \(payload.count - offset))")
              throw UDS.Error.decodingError
         }
-        return Array(payload[1...border])
+        return Array(payload[offset...border])
     }
 
     // decodes multiple frames to bytes

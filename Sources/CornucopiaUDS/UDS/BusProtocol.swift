@@ -21,6 +21,10 @@ public extension UDS {
         case user2_11B_50K  = "C"
         //FIXME: Shall we add the STN-specific protocol variants here?
 
+        // Placeholders for CAN FD (Custom/User definitions usually)
+        case can_FD_11B     = "D"
+        case can_FD_29B     = "E"
+
         var numberOfHeaderCharacters: Int { self.broadcastHeader.count }
 
         var broadcastHeader: String {
@@ -43,7 +47,8 @@ public extension UDS {
         }
 
         var isKWP: Bool { self == .kwp2000_FAST || self == .kwp2000_5KBPS }
-        var isCAN: Bool { 6...0xD ~= UInt8(self.rawValue, radix: 16) ?? 0 }
+        var isCAN: Bool { 6...0xD ~= UInt8(self.rawValue, radix: 16) ?? 0 || self.isCANFD }
+        var isCANFD: Bool { self == .can_FD_11B || self == .can_FD_29B }
 
         public var description: String { "OBD2_OBD_BUSPROTO_\(self.rawValue)".uds_localized }
     }

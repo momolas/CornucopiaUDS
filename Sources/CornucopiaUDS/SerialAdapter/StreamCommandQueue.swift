@@ -66,7 +66,7 @@ public actor StreamCommandQueue {
 
     private var monitor: StreamMonitor!
 
-    public var inputConfigurationHandler: InputStreamConfigurationHandler?
+    public private(set) var inputConfigurationHandler: InputStreamConfigurationHandler?
     public weak var delegate: Delegate?
 
     public init(input: InputStream, output: OutputStream, termination: String? = nil) {
@@ -79,7 +79,8 @@ public actor StreamCommandQueue {
         self.delegate = delegate
     }
 
-    public func configure() {
+    public func configure(handler: InputStreamConfigurationHandler? = nil) {
+        self.inputConfigurationHandler = handler
         self.monitor = StreamMonitor(actor: self)
         self.input.delegate = self.monitor
         self.output.delegate = self.monitor
@@ -318,19 +319,6 @@ private extension StreamCommandQueue {
             let startTime = active.timestamp ?? CFAbsoluteTimeGetCurrent()
             let duration = String(format: "%04.0f ms", 1000 * (CFAbsoluteTimeGetCurrent() - startTime))
             logger.debug("Command processed [\(duration)]: '\(self.string(from: active.request))' => '\(self.string(from: active.response))'")
-        active.response.removeSubrange(terminationRange)
-        guard let response = String(data: active.response, encoding: .utf8) else {
-            logger.error("Data Encoding Error - Could not convert response to UTF8")
-            active.handler("") // Fail gracefully with empty response
-            self.active = nil
-            self.handleNextCommand()
-            return
-        }
-
-        let startTime = active.timestamp ?? CFAbsoluteTimeGetCurrent()
-        let duration = String(format: "%04.0f ms", 1000 * (CFAbsoluteTimeGetCurrent() - startTime))
-        logger.debug("Command processed [\(duration)]: '\(active.request.CC_debugString)' => '\(active.response.CC_debugString)'")
-        active.handler(response)
 
             self.complete(active, with: response)
         }
@@ -341,11 +329,6 @@ private extension StreamCommandQueue {
         logger.notice("Timeout while waiting for a response to \(self.string(from: active.request))")
         self.complete(active, with: "")
     }
-        guard let active = self.active else {
-            logger.error("Command timeout called without active command!?")
-            return
-        }
-        logger.notice("Timeout while waiting for a response to \(active.request.CC_debugString)")
 
     func complete(_ command: Command, with response: String) {
         command.timeoutTask?.cancel()

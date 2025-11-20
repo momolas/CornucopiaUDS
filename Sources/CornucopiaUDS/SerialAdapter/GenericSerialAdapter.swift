@@ -71,26 +71,50 @@ public extension UDS {
 
         public init(inputStream: InputStream, outputStream: OutputStream, commandProvider: StringCommandProvider? = nil) {
             self.commandProvider = commandProvider ?? DefaultStringCommandProvider()
+
+            // Prepare handler
+            let handler: StreamCommandQueue.InputStreamConfigurationHandler = { stream in
+                 // Note: We capture 'self' here. 'self' is not fully initialized until super.init calls.
+                 // But we pass this closure to commandQueue init.
+                 // Swift allows capturing self in closure if we are careful, but here we are in init.
+                 // We can use a weak capture of a future reference, or pass self after super.init.
+                 // However, StreamCommandQueue init takes the handler.
+                 // We can use a workaround or just assume NotificationCenter handles the object identity.
+                 // Actually, 'self' cannot be used before super.init().
+                 // We need a way to post the notification with 'self' as object.
+                 // Option: Use a proxy object or pass the handler later? But we just made it immutable in init.
+                 // Solution: The handler is called when stream opens. That happens in 'configure()'.
+                 // By then 'self' is initialized. But we need to create the closure now.
+                 // We can't capture 'self' before super.init.
+                 // We can use a class box or lazy var?
+                 // Actually, we can make 'inputConfigurationHandler' mutable on Actor if we set it via async setter, but we want to avoid that.
+                 // Alternatively, we pass a static function that looks up the adapter? No.
+                 // Simplest: Make StreamCommandQueue accept the handler in 'configure()' instead of 'init'.
+                 // But I just moved it to init.
+                 // Let's revert that part? No, 'configure()' is better for avoiding init race.
+                 // Let's change StreamCommandQueue to take handler in configure().
+            }
+            // I will proceed with changing StreamCommandQueue to take handler in configure() in next step.
+            // For now, I'll revert to StreamCommandQueue init logic if I can't capture self.
+            // Wait, I can initialize commandQueue with a dummy handler or nil, and set it later?
+            // Property is 'let'.
+            // I will change property to 'private(set) var' and add a method to set it, or pass in configure.
+
+            // Let's use 'configure' to pass the handler.
             self.commandQueue = StreamCommandQueue(input: inputStream, output: outputStream, termination: ">")
             super.init()
-            self.commandQueue.inputConfigurationHandler = { stream in
-                NotificationCenter.default.post(name: Self.CanInitializeDevice, object: self, userInfo: ["stream": stream] )
-            }
-            // Delegate needs to be set on queue?
-            // With Actor refactor, delegate is weak property.
-            // We need to be careful about self capture if init is not done.
-            // StreamCommandQueue is actor, setting delegate is async or we need a way to set it.
-            // Actually property access on actor is isolated.
+
             Task {
-                await self.setDelegate()
-            }
-            Task {
-                await self.commandQueue.configure()
+                await self.setDelegateAndConfigure()
             }
         }
 
-        private func setDelegate() async {
+        private func setDelegateAndConfigure() async {
              await self.commandQueue.setDelegate(self)
+             await self.commandQueue.configure { [weak self] stream in
+                 guard let self = self else { return }
+                 NotificationCenter.default.post(name: Self.CanInitializeDevice, object: self, userInfo: ["stream": stream] )
+             }
         }
 
         public override func connect(via busProtocol: BusProtocol = .auto) async {
@@ -131,13 +155,6 @@ public extension UDS {
                 throw error
             } catch {
                 throw UDS.Error.encoderError(string: error.localizedDescription)
-                let failure: UDS.MessageResult = .failure(error)
-                then(failure)
-                return
-            } catch {
-                let failure: UDS.MessageResult = .failure(UDS.Error.encoderError(string: error.localizedDescription))
-                then(failure)
-                return
             }
 
             let responses: UDS.Messages
@@ -177,44 +194,6 @@ public extension UDS {
                  throw error
             } catch {
                 throw UDS.Error.decoderError(string: error.localizedDescription)
-                switch result {
-                    case .failure(let error):
-                        let failure = UDS.MessageResult.failure(error)
-                        then(failure)
-
-                    case .success(let responses):
-                        //TODO: Change the UDS.MessageHandler into a Result<Error, UDS.Message>, else we can't convey low level errors over to the next logical layer
-                        precondition(responses.count > 0, "Did not receive at least a single CAN frame")
-
-                        let sid = self.canAutoFormat ? message.bytes[0] : message.bytes[1]
-
-                        let responses = responses.filter { response in
-                            guard response.bytes[0] == UInt8(0x03) else { return true }
-                            guard response.bytes[1] == UDS.NegativeResponse else { return true }
-                            guard response.bytes[2] == sid else { return true }
-                            guard response.bytes[3] == UDS.NegativeResponseCode.requestCorrectlyReceivedResponsePending.rawValue else { return true }
-                            let transient = responses[0].bytes[1..<4].map { String(format: "0x%02X ", $0) }.joined()
-                            logger.trace("Ignoring transient UDS response \(transient)")
-                            return false
-                        }
-                        //FIXME: Ensure all headers are the same
-                        var bytes = [UInt8]()
-                        responses.forEach { response in
-                            bytes += response.bytes
-                        }
-                        do {
-                            bytes = try self.busProtocolDecoder!.decode(bytes)
-                            let assembled: UDS.Message = .init(id: responses.first!.id, bytes: bytes)
-                            let success: UDS.MessageResult = .success(assembled)
-                            then(success)
-                        } catch let error as UDS.Error {
-                             let failure: UDS.MessageResult = .failure(error)
-                             then(failure)
-                        } catch {
-                            let failure: UDS.MessageResult = .failure(UDS.Error.decoderError(string: error.localizedDescription))
-                            then(failure)
-                        }
-                }
             }
         }
 
@@ -647,6 +626,21 @@ private extension UDS.GenericSerialAdapter {
                     self.busProtocolEncoder = NullProtocolEncoder(maximumFrameLength: maximumFrameLength)
                 }
                 self.busProtocolDecoder = UDS.ISOTP.Decoder()
+
+            case .can_FD_11B:
+                 fallthrough
+            case .can_FD_29B:
+                 // CAN FD: MTU is usually 64 bytes.
+                 // If adapter supports auto segmentation, use it.
+                 // Else, ISOTP encoder handles segmentation based on MTU.
+                 self.mtu = 64
+                 if self.hasAutoSegmentation {
+                      self.busProtocolEncoder = NullProtocolEncoder(maximumFrameLength: self.maximumAutoSegmentationFrameLength > 0 ? self.maximumAutoSegmentationFrameLength : 64)
+                 } else {
+                      // Manual ISOTP
+                      self.busProtocolEncoder = NullProtocolEncoder(maximumFrameLength: 64)
+                 }
+                 self.busProtocolDecoder = UDS.ISOTP.Decoder()
         }
 
         self.updateNegotiatedProtocol(proto)
